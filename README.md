@@ -1,156 +1,142 @@
 const express = require('express')
 const {open} = require('sqlite')
 const sqlite3 = require('sqlite3')
-const path = require('path')
-
-
-const dbpath = path.join(__dirname, 'todoApplication.db')
-
+const path = requite('path')
+const bcrypt = require('bcrypt')
+const jwt = require('jsonwebtoken')
 
 const app = express()
+const dbPath = path.join(__dirname, 'covid19IndiaPortal.db')
 app.use(express.json())
 
-
-let db = null
-
+const db = null
 
 const initializeDBAndServer = async () => {
   try {
     db = await open({
-      filename: dbpath,
+      filename: dbPath,
       driver: sqlite3.Database,
     })
     app.listen(3000, () => {
-      console.log(' Server runnong at http://localhost:3000/')
+      console.log('Server running at http://localhost:3000/')
     })
-  } catch (e) {
-    console.log(`DB Error: ${e.message}`)
+  } catch (error) {
+    console.log(`Db '${error.message}'`)
     process.exit(1)
   }
 }
 
-
 initializeDBAndServer()
 
-
-app.get('/todos/', async (request, response) => {
-  let data = null
-  let getTodosQuery = ''
-  const {search_q = '', priority, status} = request.query
-
-
-  switch (true) {
-    case hasProrityAndStatusProperties(request.query):
-      getTodosQuery = `
-        select * from todo 
-        where title like '%${search_q}%' 
-        and status = '${status}' and
-        priority = '${priority}';`
-      break
-
-
-    case hasProrityPropertiy(request.query):
-      getTodosQuery = `
-        select * from todo 
-        where title like '%${search_q}%' and
-        priority = '${priority}';`
-      break
-
-
-    case hasStatusProperty(request.query):
-      getTodosQuery = `
-        select * from todo 
-        where title like '%${search_q}%' 
-        and status = '${status}';`
-      break
-
-
-    default:
-      getTodosQuery = `
-        select * from todo 
-        where title like '%${search_q}%';
-        `
+const authenticate = (request, response, next) => {
+  let jwtToken
+  const header = request.headers['authorization']
+  if (header !== undefined) {
+    jwtToken = header.split(' ')[1]
   }
-
-
-  data = await db.all(getTodosQuery)
-  response.send(data)
-})
-
-
-app.get('/todos/:todoId/', async (request, response) => {
-  const {todoId} = request.params
-  const getTodoQuery = `
-  select * from todo
-  where todoId = '%${todoId}%'`
-  const data = await db.get(getTodoQuery)
-  response.send(data)
-})
-
-
-app.post('/todos/', async (request, response) => {
-  const {id, todo, priority, status} = request.body
-  const addTodoQuery = `
-  Insert into todo (id, todo, priority, status)
-  values ('${id}','${todo}','${priority}','${status}');`
-  await db.run(addTodoQuery)
-  response.send('Todo Successfully Added')
-})
-
-
-app.put('/todos/:todoId/', async (request, response) => {
-  const {todoId} = request.params
-  const requestBody = request.body
-  let updateColumn = ''
-
-
-  switch (true) {
-    case requestBody.status !== undefined:
-      updateColumn = 'Status'
-      break
-
-
-    case requestBody.priority !== undefined:
-      updateColumn = 'Priority'
-      break
-
-
-    case requestBody.todo !== undefined:
-      updateColumn = 'Todo'
-      break
+  if (jwtToken === undefined) {
+    response.status(401)
+    response.send('Invalid JWT Token')
+  } else {
+    jwt.verify(jwtToken, 'secretKey', async (error, payload) => {
+      if (error) {
+        response.send('Invalid JWT Token')
+      } else {
+        next()
+      }
+    })
   }
+}
 
+app.post('/login', async (request, response) => {
+  const {username, password} = request.body
+  const userQuery = `select*from user where username = '${username}';`
+  const dbuser = await db.get(userQuery)
 
-  const prevTodoQuery = `select * from todo where todoId = '${todoId}';`
-  const prevTodo = await db.get(prevTodoQuery)
-
-
-  const {
-    todo = prevTodo.tod,
-    priority = prevTodo.priority,
-    status = prevTodo.status,
-  } = request.body
-  const updateTodoQuery = `
-    Update todo set 
-    todo = '${todo}',
-    priority = '${priority}',
-    status = '${status}'
-    where todoId = '${todoId}';`
-
-
-  await db.run(updateTodoQuery)
-  response.send(`'${updateColumn}' Updated`)
+  if (dbuser === undefined) {
+    response.status(400)
+    response.send('Invalid user')
+  } else {
+    const isPasswordMatched = await bcrypt.compare(password, dbuser.password)
+    if (isPasswordMatched === false) {
+      response.status(400)
+      response.send('Invalid password')
+    } else {
+      const payload = {
+        username: username,
+      }
+      const jwt = jwt.sign(payload, 'secretKey')
+      response.send({jwt})
+    }
+  }
 })
 
-
-app.delete('/todos/:todoId/', async (request, response) => {
-  const {todoId} = request.params
-  const deleteTodo = `
-  Delete from todo where todoId = '${todoId}';
-  `
-  await db.run(deleteTodo)
-  response.send('Todo Deleted')
+app.get('/states/', authenticate, async (request, response) => {
+  const getStatesQuery = `select * from state;`
+  const getStates = await db.all(getStatesQuery)
+  response.status(200)
+  response.send(getStates)
 })
 
+app.get('/states/:stateId/', authenticate, async (request, response) => {
+  const {stateID} = request.params
+  const getStateQuery = `select * from state where stateId = '${stateID}';`
+  const getState = await db.get(getStateQuery)
+  response.send(getState)
+})
+
+app.post('/districts/', async (request, response) => {
+  const {districtName, stateId, cases, cured, active, deaths} = request.body
+  const addDistrictQuery = `
+  insert into district (districtName, sateId, cases, cured, active, deaths)
+  values ('${districtName}','${stateId}','${cases}','${cured}','${active}','${deaths}');`
+  await db.run(addDistrictQuery)
+  response.run('District Successfully Added')
+})
+
+app.get('/districts/:districtId/', authenticate, async (request, response) => {
+  const {districtId} = request.params
+  const getDistrictQuery = `select * from district where districtId = '${districtId}';`
+  const getDistrict = await db.get(getDistrictQuery)
+  response.send(getDistrict)
+})
+
+app.delete(
+  '/districts/:districtId/',
+  authenticate,
+  async (request, response) => {
+    const {districtId} = request.params
+    const deletetDistrictQuery = `delete from district where districtId = '${districtId}';`
+    await db.run(deletetDistrictQuery)
+    response.send('District Removed')
+  },
+)
+
+app.post('/districts/:districtId', authenticate, async (request, response) => {
+  const {districtId, districtName, stateId, cases, cured, active, deaths} =
+    request.body
+  const addDistrictQuery = `
+  update district set (districtName = '${districtName}',
+   sateId = '${stateId}',
+   cases = '${cases}',
+   cured = '${cured}',
+   active = '${active}',
+   deaths = '${deaths}')
+   where districtId = '${districtId}';`
+  await db.run(addDistrictQuery)
+  response.run('District Details Updated')
+})
+
+app.get('/states/:stateId/stats', authenticate, async (request, response) => {
+  const {stateID} = request.params
+  const statsQuery = `
+  select sum(cases) as totalCases,
+    sum(cured) as totalCured,
+    sum(active) as totalActive,
+    sum(deaths) as totalDeath
+  where stateId = '${stateID}';`
+  const stats = await db.get(statsQuery)
+  response.send(stats)
+})
 
 module.exports = app
